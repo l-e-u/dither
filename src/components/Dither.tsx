@@ -1,10 +1,11 @@
 /* eslint-disable react/no-unknown-property */
-import { useRef, useEffect, forwardRef } from "react";
+import { useRef, useEffect, forwardRef, type ReactNode } from "react";
 import {
   Canvas,
   useFrame,
   useThree,
   type ThreeEvent,
+  createPortal,
 } from "@react-three/fiber";
 import { EffectComposer, wrapEffect } from "@react-three/postprocessing";
 import { Effect } from "postprocessing";
@@ -32,6 +33,9 @@ uniform vec3 waveColor;
 uniform vec2 mousePos;
 uniform int enableMouseInteraction;
 uniform float mouseRadius;
+uniform sampler2D inputTexture;
+uniform int useTexture;
+varying vec2 vUv;
 
 vec4 mod289(vec4 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
 vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
@@ -85,19 +89,26 @@ float pattern(vec2 p) {
 }
 
 void main() {
-  vec2 uv = gl_FragCoord.xy / resolution.xy;
-  uv -= 0.5;
-  uv.x *= resolution.x / resolution.y;
-  float f = pattern(uv);
-  if (enableMouseInteraction == 1) {
-    vec2 mouseNDC = (mousePos / resolution - 0.5) * vec2(1.0, -1.0);
-    mouseNDC.x *= resolution.x / resolution.y;
-    float dist = length(uv - mouseNDC);
-    float effect = 1.0 - smoothstep(0.0, mouseRadius, dist);
-    f -= 0.5 * effect;
+  if (useTexture == 1) {
+    // Use texture input
+    vec4 texColor = texture2D(inputTexture, vUv);
+    gl_FragColor = texColor;
+  } else {
+    // Generate wave pattern
+    vec2 uv = gl_FragCoord.xy / resolution.xy;
+    uv -= 0.5;
+    uv.x *= resolution.x / resolution.y;
+    float f = pattern(uv);
+    if (enableMouseInteraction == 1) {
+      vec2 mouseNDC = (mousePos / resolution - 0.5) * vec2(1.0, -1.0);
+      mouseNDC.x *= resolution.x / resolution.y;
+      float dist = length(uv - mouseNDC);
+      float effect = 1.0 - smoothstep(0.0, mouseRadius, dist);
+      f -= 0.5 * effect;
+    }
+    vec3 col = mix(vec3(0.0), waveColor, f);
+    gl_FragColor = vec4(col, 1.0);
   }
-  vec3 col = mix(vec3(0.0), waveColor, f);
-  gl_FragColor = vec4(col, 1.0);
 }
 `;
 
@@ -185,6 +196,8 @@ interface WaveUniforms {
   mousePos: THREE.Uniform<THREE.Vector2>;
   enableMouseInteraction: THREE.Uniform<number>;
   mouseRadius: THREE.Uniform<number>;
+  inputTexture: THREE.Uniform<THREE.Texture | null>;
+  useTexture: THREE.Uniform<number>;
 }
 
 interface DitheredWavesProps {
@@ -197,6 +210,7 @@ interface DitheredWavesProps {
   disableAnimation: boolean;
   enableMouseInteraction: boolean;
   mouseRadius: number;
+  children?: ReactNode;
 }
 
 function DitheredWaves({
@@ -209,9 +223,13 @@ function DitheredWaves({
   disableAnimation,
   enableMouseInteraction,
   mouseRadius,
+  children,
 }: DitheredWavesProps) {
   const mesh = useRef<THREE.Mesh>(null);
   const mouseRef = useRef(new THREE.Vector2());
+  const renderTarget = useRef<THREE.WebGLRenderTarget | null>(null);
+  const childrenScene = useRef<THREE.Scene | null>(null);
+  const childrenCamera = useRef<THREE.OrthographicCamera | null>(null);
   const { viewport, size, gl } = useThree();
 
   const waveUniformsRef = useRef<WaveUniforms>({
@@ -224,7 +242,52 @@ function DitheredWaves({
     mousePos: new THREE.Uniform(new THREE.Vector2(0, 0)),
     enableMouseInteraction: new THREE.Uniform(enableMouseInteraction ? 1 : 0),
     mouseRadius: new THREE.Uniform(mouseRadius),
+    inputTexture: new THREE.Uniform(null),
+    useTexture: new THREE.Uniform(children ? 1 : 0),
   });
+
+  // Initialize render target and scene for children
+  useEffect(() => {
+    if (children) {
+      const dpr = gl.getPixelRatio();
+      const width = Math.floor(size.width * dpr);
+      const height = Math.floor(size.height * dpr);
+
+      if (!renderTarget.current) {
+        renderTarget.current = new THREE.WebGLRenderTarget(width, height, {
+          minFilter: THREE.LinearFilter,
+          magFilter: THREE.LinearFilter,
+          format: THREE.RGBAFormat,
+        });
+      }
+
+      if (!childrenScene.current) {
+        childrenScene.current = new THREE.Scene();
+      }
+
+      if (!childrenCamera.current) {
+        const aspect = width / height;
+        const camera = new THREE.OrthographicCamera(
+          -aspect,
+          aspect,
+          1,
+          -1,
+          0.1,
+          1000
+        );
+        camera.position.z = 1;
+        childrenCamera.current = camera;
+      }
+
+      waveUniformsRef.current.inputTexture.value = renderTarget.current.texture;
+    }
+
+    return () => {
+      if (renderTarget.current) {
+        renderTarget.current.dispose();
+      }
+    };
+  }, [children, size, gl]);
 
   useEffect(() => {
     const dpr = gl.getPixelRatio();
@@ -234,11 +297,29 @@ function DitheredWaves({
     if (currentRes.x !== newWidth || currentRes.y !== newHeight) {
       currentRes.set(newWidth, newHeight);
     }
+
+    // Update render target size
+    if (renderTarget.current) {
+      renderTarget.current.setSize(newWidth, newHeight);
+    }
   }, [size, gl]);
 
   const prevColor = useRef([...waveColor]);
   useFrame(({ clock }) => {
     const u = waveUniformsRef.current;
+
+    // Render children to texture if they exist
+    if (
+      children &&
+      renderTarget.current &&
+      childrenScene.current &&
+      childrenCamera.current
+    ) {
+      const currentRenderTarget = gl.getRenderTarget();
+      gl.setRenderTarget(renderTarget.current);
+      gl.render(childrenScene.current, childrenCamera.current);
+      gl.setRenderTarget(currentRenderTarget);
+    }
 
     if (!disableAnimation) {
       u.time.value = clock.getElapsedTime();
@@ -257,6 +338,7 @@ function DitheredWaves({
 
     u.enableMouseInteraction.value = enableMouseInteraction ? 1 : 0;
     u.mouseRadius.value = mouseRadius;
+    u.useTexture.value = children ? 1 : 0;
 
     if (enableMouseInteraction) {
       u.mousePos.value.copy(mouseRef.current);
@@ -297,6 +379,10 @@ function DitheredWaves({
         <planeGeometry args={[1, 1]} />
         <meshBasicMaterial transparent opacity={0} />
       </mesh>
+
+      {children &&
+        childrenScene.current &&
+        createPortal(children, childrenScene.current)}
     </>
   );
 }
@@ -311,6 +397,7 @@ interface DitherProps {
   disableAnimation?: boolean;
   enableMouseInteraction?: boolean;
   mouseRadius?: number;
+  children?: ReactNode;
 }
 
 export default function Dither({
@@ -323,6 +410,7 @@ export default function Dither({
   disableAnimation = false,
   enableMouseInteraction = true,
   mouseRadius = 1,
+  children,
 }: DitherProps) {
   return (
     <Canvas
@@ -342,6 +430,7 @@ export default function Dither({
         disableAnimation={disableAnimation}
         enableMouseInteraction={enableMouseInteraction}
         mouseRadius={mouseRadius}
+        children={children}
       />
     </Canvas>
   );
