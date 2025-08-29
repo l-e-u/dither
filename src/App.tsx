@@ -59,40 +59,16 @@ function App() {
     <div style={{ width: "100%", height: "100vh", position: "relative" }}>
       {/* Example with video */}
       <div style={{ width: "100%", height: "50%", display: "block" }}>
-        <Dither
-          colorNum={8}
-          pixelSize={2}
-          disableAnimation={true}
-          enableMouseInteraction={false}
-        >
+        <Dither colorNum={8} pixelSize={2}>
           <VideoComponent />
         </Dither>
       </div>
 
       {/* Example with image */}
-      <div style={{ width: "50%", height: "50%", display: "inline-block" }}>
-        <Dither
-          colorNum={4}
-          pixelSize={3}
-          disableAnimation={true}
-          enableMouseInteraction={false}
-        >
+      <div style={{ width: "100%", height: "50%", display: "block" }}>
+        <Dither colorNum={4} pixelSize={3}>
           <ImageComponent />
         </Dither>
-      </div>
-
-      {/* Example with generated waves (no children) */}
-      <div style={{ width: "50%", height: "50%", display: "inline-block" }}>
-        <Dither
-          waveColor={[0.5, 0.5, 0.5]}
-          disableAnimation={false}
-          enableMouseInteraction={true}
-          mouseRadius={0.3}
-          colorNum={4}
-          waveAmplitude={0.3}
-          waveFrequency={3}
-          waveSpeed={0.05}
-        />
       </div>
     </div>
   );
